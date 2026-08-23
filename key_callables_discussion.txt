@@ -1,0 +1,1053 @@
+================================================================================
+callables_discussion.txt
+================================================================================
+Paper: "How Simple Can It Get? From Interpretable Equations to Readable Rules
+for Financial Decision Making"
+Authors: Adia Lumadjeng, Ilker Birbil, Erman Acar
+E-Journal Submission Date: 10 August 2026
+Link: https://arxiv.org/abs/2608.09433v1
+
+Scope: Inputs, Processes, and Outputs of the sixteen FINAL task-specific and
+top-level orchestrator Python callables, Tasks 1 to 16-plus, as implemented in
+the reproduction-study workbook. For each callable: (a) Inputs/Processes/
+Outputs; (b) the input-to-output transformation; (c) LaTeX-context excerpts
+explicating the callable's role; and (d) the element of the research pipeline
+the callable implements, with the governing equations in LaTeX notation.
+
+All line anchors refer to the workbook
+"from_interpretable_equations_to_readable_rules_for_financial_decision_making.py".
+No Python code is presented in this document.
+================================================================================
+
+
+================================================================================
+Callable 1 of 16: orchestrate_validation
+Task 1: Validate ingested raw data structures and configuration parameters
+(workbook line 5135)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- loan_raw : pd.DataFrame — raw Lending Club Loan Data (Kaggle source).
+- fraud_ecom_raw : pd.DataFrame — raw Fraud Ecommerce dataset (Kaggle).
+- default_raw : pd.DataFrame — raw UCI Default of Credit Card Clients dataset
+  (Yeh and Lien 2009).
+- creditcard_raw : pd.DataFrame — raw Credit Card Fraud dataset (Dal Pozzolo
+  et al. 2015).
+- study_configuration : Dict — the single source of truth containing every
+  paper-derived and replicator-chosen parameter.
+- output_dir : Path — directory into which the validation reports are written.
+
+Processes (executed in strict order):
+1. Type-validate all six arguments (four DataFrames, dict, Path); fail fast.
+2. Invoke validate_configuration (Task 1, Step 1.2) first: every paper-derived
+   constant — dataset positive rates, feature counts, split fractions 0.60/
+   0.20/0.20, scaling bounds (0.01, 10.01), pruning tolerance 0.01, P_max = 5,
+   ECE bins B = 10, seeds [0,1,2,3,4], and the LLM-absence contract — is
+   compared against hard-coded paper constants with tolerance 10^-10; the
+   log-bound constant L = max{|log 0.01|, |log 10.01|} is recomputed, not
+   trusted. The normalized configuration is returned.
+3. Invoke validate_all_raw_schemas (Task 1, Step 1.1): per-dataset schema
+   contracts (required columns with dtype assertions and alias resolution,
+   e.g. raw_class/class, DEFAULT_NEXT_MONTH/default.payment.next.month),
+   row-count lower bounds, per-column missingness proportions; SchemaValidationError
+   on any failure; validation_report.json persisted.
+4. Invoke validate_all_label_rates (Task 1, Step 1.3): direct positive-rate
+   checks for FraudEcom (0.094), Default (0.221), Creditcard (0.0017) within
+   +-0.001; for Loan, the {"Fully Paid", "Charged Off"} filter is applied and
+   the filtered count (within 0.5% of 395,492) and rate (within 0.001 of
+   0.101) are checked; LabelRateError with a full value_counts diagnostic on
+   mismatch; label_check_report.json persisted.
+5. Assemble the merged report {"config", "schemas", "label_rates"}.
+
+Outputs:
+- Dict with keys "config" (normalized configuration + config report),
+  "schemas" (per-dataset schema report), "label_rates" (per-dataset label
+  report), and the two persisted JSON reports under output_dir.
+- Raises ConfigError / SchemaValidationError / LabelRateError on any breach.
+
+(b) Input-to-output transformation
+Four raw, unvalidated frames plus an unvalidated configuration are transformed
+into a normalized, auditable configuration and three verified reports: the
+configuration is normalized and frozen; raw frames are checked for schema
+conformance; label columns are coerced to canonical strings and their
+positive-class rates are checked against the paper's population contract. No
+row is reordered, dropped, or mutated.
+
+(c) LaTeX-context role
+The paper's experimental setup defines the population contract this callable
+enforces: "Each dataset is split into training, validation, and test sets
+(60/20/20, stratified by label), repeated over five random seeds," over four
+datasets summarized as "Creditcard 284,807 rows / 30 features / 0.17% positive
+rate; FraudEcom 151,112 / 6 / 9.4%; Loan 395,492 / 42 / 10.1%; Default
+30,000 / 26 / 22.1%," where "y = 1 denotes the minority risk class."
+
+(d) Element of the research implemented
+The schema-and-class-balance verification gate: every downstream task assumes
+the paper's population, so the callable verifies feature counts, binary
+labels, and base rates before any feature engineering. It is the fail-fast
+entry point of the whole reproduction; the positive rates it locks are later
+used as PR-AUC base-rate references ("we use the area under the precision-recall
+curve (PR-AUC) as the primary performance metric and report the corresponding
+base rate for reference").
+
+
+================================================================================
+Callable 2 of 16: cleanse_all
+Task 2: Cleanse raw data with leakage-free, training-only decisions
+(workbook line 5904)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- raw_dfs : Dict[str, pd.DataFrame] — validated raw frames keyed by dataset
+  name ("Loan", "FraudEcom", "Default", "Creditcard").
+- cfg : Dict — validated study configuration.
+- output_dir : Path — project output root for the versioned artifact archive.
+
+Processes:
+1. Validate the mapping type and the presence of all four required datasets.
+2. cleanse_loan (Task 2, Step 1): retain only rows with loan_status in
+   {"Fully Paid", "Charged Off"}; y = 1 for "Charged Off", y = 0 for
+   "Fully Paid"; drop id and loan_status; parse int_rate (% strip), term,
+   emp_length ("< 1 year"->0 ... "10+ years"->10), grade (A=1..G=7); parse
+   issue_d / last_pymnt_d / last_credit_pull_d with format %b-%Y; compute
+   calendar months since the reference date 2026-08-09; build missingness
+   flags (next_pymnt_missing, mths_since_last_delinq_missing,
+   mths_since_last_record_missing) WITHOUT imputing; encode home_ownership
+   (RENT/MORTGAGE/OWN indicators), verification_status (Source_Verified/
+   Not_Verified), purpose (debt_consolidation/credit_card/home_improvement/
+   other); combine last_fico_range_high/low into fico_midpoint.
+3. cleanse_fraud_ecom (Step 2): drop user_id and browser; parse signup_time/
+   purchase_time; compute time_to_purchase_hours but exclude it; rename sex
+   -> sex_bin; PRESERVE raw ip_address and device_id for the training-only
+   count construction in Task 3; rename label to y.
+4. cleanse_default (Step 2): drop ID; recode EDUCATION {0,5,6}->4, MARRIAGE
+   {0}->3, SEX -> SEX_bin (1 for male, 0 for female); rename
+   DEFAULT_NEXT_MONTH -> y.
+5. cleanse_creditcard (Step 2): rename Class -> y; retain Time, V1..V28,
+   Amount.
+6. persist_cleansed (Step 3): write each cleansed frame to a versioned
+   parquet file preserving dtypes and the original index; compute SHA-256
+   checksums of the on-disk bytes; write cleansing_report.json with filtering
+   decisions, recoding rules, row counts, and a timestamp.
+
+Outputs:
+- Dict with "cleansed" (four cleansed DataFrames), "logs" (per-dataset
+  cleansing logs), and "persistence" (persistence report with checksums).
+
+(b) Input-to-output transformation
+Raw, messy frames are converted into typed, deterministic, leakage-safe
+frames: parsing, recoding, filtering, and flagging only — no statistics that
+would require validation/test rows are computed. The original row index is
+preserved so that Task 4 split indices remain aligned; the cleansed state is
+frozen to disk so that no later task re-reads the raw inputs.
+
+(c) LaTeX-context role
+The paper's feature-scaling requirement motivates the no-leakage rule:
+"Because the exponents are real-valued, every feature is scaled to a fixed
+positive range [\ell, u] with 0 < \ell before fitting; this scaling is fit on
+the training split alone." Cleansing is the first stage in which the paper's
+"deterministic pipeline construction" and "data cleaning and integrity checks"
+are executed, including the Loan label filter that reproduces n = 395,492
+and positive rate 0.101.
+
+(d) Element of the research implemented
+Leakage-free raw-data cleansing and immutable artifact persistence: the label
+mapping y in {0, 1} with the minority class (default/fraud) encoded positive,
+the deterministic parsing/recoding rules, and the checksummed artifact store
+that makes every later number traceable to a specific cleansed snapshot.
+
+
+================================================================================
+Callable 3 of 16: build_feature_matrices
+Task 3: Construct deterministic feature matrices
+(workbook line 6792 — the live orchestrator; a superseded draft at line 6730
+is explicitly shadowed)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- cleansed_dfs : Dict[str, pd.DataFrame] — cleansed frames keyed by dataset.
+- cfg : Dict — validated configuration (holds the canonical feature-name
+  tuples and counts 42/6/26/30).
+- fraud_train_idx : np.ndarray — positional training indices for FraudEcom
+  count construction (leakage-safe: counts built from training rows only).
+- output_dir : Path — artifact archive root.
+
+Processes:
+1. Validate the mapping and dataset presence.
+2. build_loan_features: select the exact ordered 42-column tuple from the
+   cleansed frame; return X (float64), y, original_index; no imputation here.
+3. build_fraud_features: build ip_shared_count and device_shared_count via
+   training-only value_counts maps, unseen values mapped to count 1; encode
+   source via the fixed dictionary {SEO:0, Ads:1, Direct:2}; assemble the six
+   features (purchase_value, age, sex_bin, ip_shared_count,
+   device_shared_count, source_encoded).
+4. build_default_features: select the 23 raw predictors; add pay_status_mean,
+   bill_amt_mean, pay_amt_mean (row-wise means over the six-month panel).
+5. build_creditcard_features: select Time, V1..V28, Amount in order.
+6. verify_feature_counts: assert Loan=42, FraudEcom=6, Default=26,
+   Creditcard=30; assert finite values; assert label alignment.
+7. persist_feature_matrices: versioned, atomic, compressed artifacts with
+   feature names and original indices.
+
+Outputs:
+- Dict with "matrices" ({dataset: {X, y, original_index}}), "verification"
+  (count/finiteness report), "persistence" (artifact map).
+
+(b) Input-to-output transformation
+Cleansed tabular frames become numeric model matrices with exactly the
+paper-declared dimensionalities (n x 42, n x 6, n x 26, n x 30): direct named
+column selection (never positional or regex), row-wise panel means, and
+training-only frequency mapping for the FraudEcom count features. Designated
+imputation columns may still carry NaN at this stage; unexpected NaN is a
+cleansing error and aborts.
+
+(c) LaTeX-context role
+The paper's dataset table fixes the target dimensions the callable enforces:
+"Loan 395,492 rows, 42 features; FraudEcom 151,112 rows, 6 features; Default
+30,000 rows, 26 features; Creditcard 284,807 rows, 30 features." The
+FraudEcom rule of the paper — "Predict fraud when IP shared count is high,
+device shared count is high, the sex indicator is 1, and purchase value is
+low" — is the downstream consumer of the training-only count features.
+
+(d) Element of the research implemented
+Deterministic, dimension-exact feature-matrix construction with a mandatory
+quality gate (counts, finiteness, label alignment) and artifact persistence.
+The feature-name tuples recorded here are the index map that translates every
+fitted exponent position back to a human-readable financial variable for the
+pruned monomial, directional rule, and scorecard.
+
+
+================================================================================
+Callable 4 of 16: orchestrate_splitting_and_scaling
+Task 4: Stratified splitting and train-only min-max scaling
+(workbook line 7375)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- X : np.ndarray, shape (n, m) — feature matrix from Task 3.
+- y : np.ndarray, shape (n,) — binary label vector.
+- cfg : Dict — validated configuration (split fractions, seeds, bounds).
+- dataset_name : str — artifact naming and imputation policy.
+- feature_names : Sequence[str] — names aligned with matrix columns.
+- seed : int — random seed for the stratified split.
+- output_dir : Path — artifact archive root.
+
+Processes:
+1. Step 4.1 — make_stratified_splits: StratifiedShuffleSplit-based 60/20/20
+   split (first 60/40, then 50/50 of the 40%), deterministic random state =
+   seed, positive-rate check +-0.001 per partition, at-least-one-positive
+   assertion; returns positional index arrays (train_idx, val_idx, test_idx).
+2. Step 4.2 — fit_preprocessing on X[train_idx] ONLY: per-feature training
+   medians (for remaining NaN columns such as revol_util, fico_midpoint),
+   mins, maxs; constant-feature policy (denominator zero -> midpoint 5.01
+   with warning); returns an immutable FittedPreprocessing container.
+3. Step 4.3 — apply_preprocessing: impute validation/test NaN with training
+   medians; apply the affine transform to all three partitions; clip
+   out-of-range values to [0.01, 10.01] and record clip counts; assert the
+   range and the log-bound constant L.
+4. Persist splits (npz), fitted statistics (JSON with medians/mins/maxs/
+   modes/constant policy/L/timestamp), and scaled matrices (npz) under
+   versioned artifact directories.
+
+Outputs:
+- Dict with "splits" ({train, val, test} index arrays), "fitted"
+  (FittedPreprocessing), "scaled" ({train, val, test} matrices), "clip_counts"
+  (per-split counts), "persistence" (artifact paths).
+
+(b) Input-to-output transformation
+One un-split, unscaled matrix pair (X, y) becomes three disjoint scaled
+partitions whose positive rates match the full data: rows are partitioned by
+class stratum, statistics are fit on training rows only, and validation/test
+rows are transformed exclusively by those training-derived statistics — the
+leakage-safe preprocessing chain. The label vector is never transformed.
+
+(c) LaTeX-context role
+The paper prescribes the exact transform and split design: "features are
+scaled to [0.01, 10.01], with the scaler fit on the training split only ...
+repeated over five random seeds," and the derived worst-case bound constant
+L = max{|log 0.01|, |log 10.01|} = 4.605170185988091 that the callable
+recomputes and persists. Clipping maintains the bound's precondition that
+every feature lie in the scaled range.
+
+(d) Element of the research implemented
+Stratified resampling (five seeds, 60/20/20) and min-max scaling with
+leakage control, expressed as the affine transformation
+\tilde{x}_j = 0.01 + 10.0 * (x_j - min_j) / (max_j - min_j),
+with the log-feature bound L = max{|log \ell|, |log u|}. The scaled matrices
+and split indices are the immutable inputs to training, pruning, threshold
+selection, and calibration.
+
+
+================================================================================
+Callable 5 of 16: orchestrate_hyperparameter_search
+Task 5: Optuna hyperparameter search on training splits
+(workbook line 7830)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- X_train : np.ndarray, shape (n_train, m) — scaled seed-0 training matrix.
+- y_train : np.ndarray, shape (n_train,) — seed-0 training labels.
+- cfg : Dict — validated configuration (search-space ranges, trial budget).
+- dataset_name : str — study and artifact naming.
+- output_dir : Path — artifact root.
+- seed : int, default 0 — tuning seed (disambiguated once-per-dataset
+  protocol: tuned on the seed-0 split, applied to all five seeds).
+
+Processes:
+1. If a hyperparameter record already exists for the dataset, load and return
+   it (single source of truth; no re-search).
+2. Otherwise run run_hyperparameter_search: Optuna study with direction
+   maximize, TPESampler with fixed seed, MedianPruner, 100 trials; each trial
+   samples eta log-uniform in [1e-4, 1e-1], lambda log-uniform in [1e-6,
+   1e-2], epochs uniform integer in [100, 3000]; optuna_objective performs
+   five-fold stratified cross-validation on the training split using the
+   Task 6 core training routine, which stops on training-loss convergence
+   (never on fold-validation PR-AUC, to prevent hyperparameter leakage); the
+   objective returns mean fold PR-AUC.
+3. Persist the study in SQLite (resumable) and the best configuration
+   (eta*, lambda*, epochs*, best CV PR-AUC) as a checksummed JSON via
+   persist_hyperparameters.
+
+Outputs:
+- Dict with "configuration" (the best-trial record) and "persistence"
+  (JSON + study-database report).
+
+(b) Input-to-output transformation
+A training-only feature matrix and labels are transformed into a frozen
+hyperparameter record: the cross-validated PR-AUC is the only selection
+metric; the search trace and best configuration are persisted so every later
+training run — across all five seeds — reuses the identical configuration.
+
+(c) LaTeX-context role
+The paper states: "Hyperparameters were optimized using Optuna on the
+training split, with the best configuration selected by cross-validation."
+The paper also supplies the three search axes' semantics: learning rate and
+regularization govern the regularized logistic objective
+\mathcal{L}(\alpha, \beta) = -(1/n) \sum_i [ y_i log \sigma(z_i) + (1 - y_i)
+log(1 - \sigma(z_i)) ] + \lambda \sum_j |\beta_j|,
+with epochs bounding gradient-descent training.
+
+(d) Element of the research implemented
+Bayesian hyperparameter search for the ECSEL monomial: selection of learning
+rate, l1-regularization strength, and training length on the training
+partition only, optimizing cross-validated PR-AUC — the paper's "primary
+ranking metric for imbalanced classification."
+
+
+================================================================================
+Callable 6 of 16: orchestrate_monomial_training
+Task 6: Train the full ECSEL single-term monomial
+(workbook line 8479)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- X_train : np.ndarray, shape (n_train, m) — scaled training matrix.
+- y_train : np.ndarray, shape (n_train,) — binary training labels.
+- hparams : Dict — selected hyperparameters from the Task 5 record.
+- cfg : Dict — validated configuration (init values, convergence criterion).
+- dataset_name : str, seed : int, output_dir : Path.
+- X_val, y_val : Optional[np.ndarray] — validation partition used ONLY for
+  post-training PR-AUC (no early stopping).
+
+Processes:
+1. Step 6.2 — train_monomial: initialize alpha = 1.0, beta_j = 0.1 for all j;
+   precompute log X once; gradient-descent updates via automatic
+   differentiation on the numerically stable log-space forward and the
+   regularized loss; stop when the mean absolute relative training-loss
+   change over 20 consecutive epochs is below 1e-6 or the epoch budget is
+   exhausted; compute validation PR-AUC after training; record epoch count
+   and convergence status in a TrainResult.
+2. Step 6.3 — verify_trained_monomial: assert finite monomial outputs on a
+   deterministic sample; assert the log-space identity to within 1e-6; log
+   (not abort on) the smooth-loss gradient norm; record the support
+   {j : |beta_j| > 0}.
+3. Persist fitted parameters and the per-epoch loss history as JSON records
+   with feature names and timestamps.
+
+Outputs:
+- Dict with "train_result" (TrainResult: alpha, beta, history, epochs_used,
+  converged, val_pr_auc), "verification", "persistence".
+
+(b) Input-to-output transformation
+Scaled features and labels are transformed into a fitted, verified monomial:
+the multiplicative model is trained in log-space for numerical stability, and
+the fitted (alpha, beta) become the immutable inputs to pruning (Task 7),
+the directional rule (Task 8), and the scorecard/tally (Task 9).
+
+(c) LaTeX-context role
+The callable implements the paper's core model:
+z(x) = \alpha \prod_{j=1}^{m} x_j^{\beta_j},  P(y = 1 | x) = \sigma(z(x)),
+its log-space identity
+log|z(x)| = log|\alpha| + \sum_{j=1}^{m} \beta_j \log x_j,
+and the regularized loss \mathcal{L}(\alpha, \beta) = -(1/n) \sum_i [ y_i
+log \sigma(z_i) + (1 - y_i) log(1 - \sigma(z_i)) ] + \lambda \sum_j |\beta_j|,
+"with sparsity regularization applied to the exponents" and parameters
+"learned by gradient descent ... continuing until convergence of the training
+objective."
+
+(d) Element of the research implemented
+ECSEL single-term monomial estimation via empirical risk minimization and
+automatic differentiation, plus convergence/stability verification. The
+verification of the log-space identity is one of the paper's mathematical
+unit tests and guarantees that the interpretable decomposition into support,
+direction, and magnitude is numerically exact.
+
+
+================================================================================
+Callable 7 of 16: orchestrate_pruning
+Task 7: Post-hoc pruning and support-size selection
+(workbook line 8952)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- alpha : float — fitted coefficient from Task 6.
+- beta : np.ndarray, shape (m,) — full fitted exponent vector.
+- X_val : np.ndarray, shape (n_val, m) — scaled validation matrix.
+- y_val : np.ndarray, shape (n_val,) — validation labels.
+- cfg : Dict — validated configuration (tolerance 0.01, L).
+- dataset_name : str, seed : int, output_dir : Path.
+- feature_names : Sequence[str] — names aligned with matrix columns.
+
+Processes:
+1. Step 7.1 — evaluate_pruning_candidates: sort features by descending
+   |beta_j| (tie-break ascending index); for each r = 1..m compute the
+   pruned logit in log-space with a masked beta and the validation PR-AUC;
+   record the full curve and the ranking order.
+2. Step 7.2 — select_pruning_level: choose
+   r* = min{ r : PR-AUC_val(r) >= PR-AUC_val(full) - 0.01 };
+   if none, r* = m with a warning; record the retained set R and removed
+   set R^c.
+3. Step 7.3 — verify_pruning_bound: on validation rows (never test), compute
+   the maximum realized gap
+   max_x |s_full(x) - s_pruned(x)| and assert it does not exceed
+   L * sum_{j in R^c} |beta_j|; abort on violation beyond 1e-6.
+4. Persist the support record (with retained names and exponents) and the
+   per-r PR-AUC curve as JSON artifacts.
+
+Outputs:
+- Dict with "curve", "support", "bound_verification", "persistence".
+
+(b) Input-to-output transformation
+A full fitted monomial plus validation data are transformed into a pruned
+monomial: the exponent vector is reduced to the smallest support whose
+validation PR-AUC stays within tolerance, and the worst-case perturbation
+bound is empirically verified on the validation sample before the support is
+consumed by every downstream simplification.
+
+(c) LaTeX-context role
+The paper's Remark states the exact bound the callable verifies: "With
+features scaled to [\ell, u], 0 < \ell, and L := max{|log \ell|, |log u|},
+the log-scores before and after pruning satisfy
+|s_full(x) - s_pruned(x)| = |\sum_{j in S} \beta_j \log x_j| <= L \sum_{j in S}
+|\beta_j|, for every x." The paper adds: "we therefore choose r on validation
+data as the smallest value whose PR-AUC remains within a fixed tolerance of
+the full monomial" — the exact selection rule implemented.
+
+(d) Element of the research implemented
+Post-hoc pruning by exponent magnitude with support-size selection on the
+validation partition, justified as the worst-case-optimal criterion by the
+triangle-inequality bound, and verified as a mathematical unit test. The
+paper's empirical claim "pruning is nearly free" (max PR-AUC loss 0.008) is
+produced by this callable's downstream evaluation.
+
+
+================================================================================
+Callable 8 of 16: orchestrate_directional_rule
+Task 8: Directional rule construction and closed-form fidelity prediction
+(workbook line 9365)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- alpha : float, beta : np.ndarray (m,) — fitted monomial parameters.
+- retained : Sequence[int] — retained feature positions from Task 7.
+- X_train, X_val, X_test : np.ndarray — scaled matrices (train used ONLY for
+  the covariance; val/test for scores).
+- cfg : Dict; dataset_name : str; seed : int; feature_names : Sequence[str];
+  output_dir : Path.
+
+Processes:
+1. Step 8.1 — build_directional_rule: construct d_j = sign(beta_j) for j in R
+   and 0 otherwise; compute the directional score
+   s_dir(x) = \sum_{j in R} sign(beta_j) log x_j on validation and test;
+   produce the natural-language mapping (high/low increases risk) from the
+   sign of alpha * beta_j.
+2. Step 8.2 — predict_fidelity: on the TRAINING log-feature matrix only,
+   compute the sample covariance (n-1 denominator), the Pearson correlation
+   rho = (beta^T Sigma d) / (sqrt(beta^T Sigma beta) sqrt(d^T Sigma d)),
+   clip |rho| > 1 numerically with a logged event, and apply Greiner's
+   relation tau_pred = (2/pi) arcsin(rho).
+3. Step 8.3 — record_fidelity_predictions: persist rho, tau_pred, the
+   retained support, and the sign vector BEFORE any held-out evaluation of
+   the directional rule.
+
+Outputs:
+- Dict with "d", "scores" ({val, test}), "rule_mapping", "prediction"
+  (rho, tau_pred), "persistence".
+
+(b) Input-to-output transformation
+The fitted exponent vector and retained support are transformed into a
+sign-flattened scoring rule and a closed-form a-priori fidelity prediction:
+magnitudes are discarded, directions retained, and the predicted rank
+fidelity is derived purely from fitted exponents and training covariance —
+no directional-rule evaluation is required.
+
+(c) LaTeX-context role
+The paper's Proposition is the governing mathematics: "Up to constants, the
+full and directional log-scores are the linear functions s_full = beta^T w
+and s_dir = d^T w ... Their correlation is
+rho = (beta^T Sigma d) / (sqrt(beta^T Sigma beta) sqrt(d^T Sigma d)), which
+holds without distributional assumptions. If w is elliptically distributed,
+Greiner's relation links this correlation to the rank fidelity between the
+two scores: tau = (2/pi) arcsin(rho)." The paper notes the prediction "can be
+estimated before the simplified rule is produced" — the callable's defining
+property.
+
+(d) Element of the research implemented
+Directional-rule construction and closed-form fidelity prediction: the only
+simplification whose expected agreement with the original classifier is
+computable immediately after training, before the rule is even evaluated.
+The paper's Table (rho, tau_pred, tau_b, MAE) — with MAE 0.017 on Loan/
+Default/Creditcard and 0.236 on FraudEcom (tie-sensitive failure) — is
+generated from this callable's records.
+
+
+================================================================================
+Callable 9 of 16: orchestrate_scorecard_tally
+Task 9: Scorecard and tally construction with validation-threshold selection
+(workbook line 9823)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- alpha : float, beta : np.ndarray (m,), retained : Sequence[int] — fitted
+  monomial and pruned support.
+- X_train, X_val, X_test : np.ndarray — scaled matrices (train used ONLY for
+  median cutpoints).
+- y_val, y_test : np.ndarray — validation and test labels.
+- cfg : Dict; dataset_name : str; seed : int; feature_names : Sequence[str];
+  output_dir : Path.
+
+Processes:
+1. Step 9.1 — build_binary_conditions: for each retained feature, the
+   training median c_j is the cutpoint; the risk-increasing side follows the
+   sign of alpha * beta_j; indicators are
+   1_j(x) = I[x_j >= c_j] if alpha*beta_j > 0, else I[x_j <= c_j];
+   indicator matrices are produced for validation and test.
+2. Step 9.2 — assign_scorecard_points:
+   p_j = max(1, round(5 * |beta_j| / max_k |beta_k|)) with P_max = 5;
+   scorecard_score computes V(x) = \sum_j p_j 1_j(x); tally_score computes
+   T(x) = \sum_j 1_j(x) for validation and test.
+3. Step 9.3 — select_thresholds: enumerate all integer thresholds v in
+   {1..sum p_j} and t in {1..|R|}; maximize validation F1 (the
+   replicator-chosen decision metric); apply the selected thresholds to the
+   test split, producing binary predictions.
+4. Persist the scorecard record (points, cutpoints, sides, thresholds,
+   validation F1s) and the score/indicator matrices as JSON + npz.
+
+Outputs:
+- Dict with "conditions", "points", "scores" ({V_val, V_test, T_val,
+  T_test}), "selection" (v*, t*, test predictions), "persistence".
+
+(b) Input-to-output transformation
+Continuous retained features are binarized at fixed training medians, then
+compressed into two additive integer rules: an integer-point scorecard
+(preserving approximate magnitude) and an equal-weight tally (magnitude
+removed); validation F1 selects the flag thresholds, which are then applied
+to test.
+
+(c) LaTeX-context role
+The paper defines both rules verbatim: "The tally rule is given by
+T(x) = \sum_{j=1}^{r} 1_j(x), flag when T(x) >= t," and "p_j = max(1,
+round(P_max |beta_j| / max_k |beta_k|)) ... The resulting score is
+V(x) = \sum_{j=1}^{r} p_j 1_j(x), flag when V(x) >= v," with "cutpoint c_j,
+set to the feature's training-set median" and "P_max = 5 in the experiments."
+The paper's workhorse example (points (5, 3, 1) from exponents
+(1.4, 0.9, 0.4)) is exactly the formula implemented.
+
+(d) Element of the research implemented
+Binarization-based scorecard and tally construction with validation-only
+integer threshold selection. This is the representation family whose
+predictive cost the paper quantifies as largest: "On Loan, PR-AUC falls from
+0.885 for the pruned monomial to 0.329 for the scorecard, and 0.300 for the
+tally."
+
+
+================================================================================
+Callable 10 of 16: orchestrate_calibration
+Task 10: Isotonic calibration and expected-calibration-error computation
+(workbook line 10364)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- scores_val : Dict[str, np.ndarray] — validation scores keyed by the five
+  representations (full, pruned, directional, scorecard, tally).
+- scores_test : Dict[str, np.ndarray] — corresponding test scores.
+- y_val, y_test : np.ndarray — validation and test labels.
+- cfg : Dict; dataset_name : str; seed : int; output_dir : Path.
+
+Processes:
+1. Validate that both score dictionaries contain exactly the five canonical
+  representation keys.
+2. For each representation in order: Step 10.1 — fit_isotonic_calibrator on
+   the validation scores (pooled-adjacent-violators isotonic regression with
+   a constant fallback when validation risk cannot be monotonically mapped);
+   Step 10.2 — compute_ece applies the calibrator to test scores (out-of-range
+   scores clipped to the validation-score endpoints) and partitions the test
+   set into B = 10 equal-mass bins, computing
+   ECE = \sum_{b=1}^{B} (|b| / n) |acc(b) - conf(b)|;
+   Step 10.3 — record_calibration persists the ECE record, calibrated test
+   scores, bin boundaries, and per-bin counts; asserts ECE in [0, 1].
+3. Uniform calibration of ALL five representations (the disambiguated
+   protocol), not only the three non-probabilistic forms.
+
+Outputs:
+- Dict keyed by representation, each with "calibrator", "ece_record",
+  "calibrated_scores", "persistence".
+
+(b) Input-to-output transformation
+Non-probabilistic scores (and the monomial logits) are transformed into
+reliable probability estimates: the validation-fit isotonic map is applied
+unchanged to test scores, and the mean absolute bin-wise discrepancy between
+observed positive frequency and mean predicted probability is reported.
+
+(c) LaTeX-context role
+The paper prescribes the mechanism and the metric: "we calibrate each
+representation on the validation set using isotonic regression and report
+its expected calibration error (ECE) on the test set,
+ECE = \sum_{b=1}^{B} (|b|/n) |acc(b) - conf(b)|, where the test set is
+partitioned into B equal-mass bins by predicted probability." The paper's
+finding "after validation-set isotonic recalibration, ECE remains low across
+representations and datasets, showing that simplified scores can yield
+reliable probability estimates" is produced here.
+
+(d) Element of the research implemented
+Isotonic probability calibration and expected-calibration-error computation
+for all five representations — the mechanism that lets the paper report ECE
+rows in its central results table (e.g., Loan ECE 0.001-0.002 across forms).
+
+
+================================================================================
+Callable 11 of 16: run_reproduction_study
+Task 11: Create the orchestrator function for the end-to-end research pipeline
+(workbook line 10878)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- cfg : Dict — validated configuration.
+- cleaned_inputs : Dict[str, pd.DataFrame] — cleansed frames (Task 2).
+- output_dir : Path — artifact root.
+- datasets : Optional[Sequence[str]] — subset to run (default all four).
+- seeds : Optional[Sequence[int]] — subset of seeds (default the configured
+  five).
+
+Processes (the documented twelve-step sequence per dataset and seed):
+1. Build the static feature matrices once per dataset (Loan, Default,
+   Creditcard); FraudEcom is special-cased: its seed-0 split is computed on
+   the frame itself, then build_fraud_features runs on seed-0 training rows
+   (leakage-safe count construction AFTER the split).
+2. Resolve hyperparameters once per dataset via _resolve_hyperparameters
+   (load the Task 5 record or run the search on the seed-0 split).
+3. For each seed: _run_dataset_seed executes — splits; train-only
+   preprocessing fit and apply; FraudEcom count features per seed; monomial
+   training (Task 6); pruning and support selection (Task 7); directional
+   rule (Task 8); fidelity prediction; scorecard/tally with thresholds
+   (Task 9); isotonic calibration of all five representations (Task 10);
+   test PR-AUC; test Kendall tau_b vs the full monomial; per-seed assembly.
+4. The orchestrator enforces the anti-leakage invariant: validation and test
+   rows enter only their designated callables; the test partition is read
+   only by the final evaluation steps.
+
+Outputs:
+- Nested Dict keyed dataset -> seed -> representation -> metric, with
+  per-seed timing logged.
+
+(b) Input-to-output transformation
+Cleansed frames and a validated configuration are transformed into the
+complete per-seed quantitative results structure: every fitted object
+(alpha, beta, support, thresholds, calibrators) and every metric (PR-AUC,
+tau_b, ECE, rho, tau_pred) is assembled and persisted, with each quantity
+computed exactly once and reused downstream.
+
+(c) LaTeX-context role
+The paper's experimental protocol is the sequencing contract: "The test split
+is used only for the final evaluation" and "Pruning level and all decision
+thresholds are chosen on the validation split." The fidelity measurement the
+orchestrator applies is the tie-corrected Kendall's tau_b:
+tau_b = (C - D) / sqrt((C + D + T_s)(C + D + T_f)),
+"where C and D denote the number of concordant and discordant pairs, and T_s
+and T_f account for ties in the simplified and full scores, respectively."
+
+(d) Element of the research implemented
+The end-to-end quantitative engine of the reproduction study: the controlled
+simplification pipeline from fitted monomial to all four readable
+representations, with predictive performance, rank fidelity, and calibration
+measured per seed — the machinery behind the paper's central results table
+and the "predictive performance and fidelity capture different properties"
+finding.
+
+
+================================================================================
+Callable 12 of 16: orchestrate_iht_comparison
+Task 12: Robustness analysis: iterative hard thresholding and Jaccard
+(workbook line 11735)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- alpha : float, beta : np.ndarray (m,) — full monomial parameters (kept for
+  interface symmetry; the IHT trainer re-initializes).
+- support_prune : Sequence[int] — post-hoc pruned support (sets s).
+- X_train, y_train : np.ndarray — scaled training matrix and labels.
+- X_test, y_test : np.ndarray — scaled test matrix and labels.
+- hparams : Dict — hyperparameter record (same eta*, epochs* as Task 6).
+- cfg : Dict; dataset_name : str; seed : int; pr_auc_prune : float (test
+  PR-AUC of the pruned monomial); feature_names : Sequence[str];
+  output_dir : Path.
+
+Processes:
+1. Derive the IHT sparsity level s = |S_prune| (configuration Section 11
+   contract).
+2. Step 12.1 — train_iht_monomial: identical optimizer and loss to
+   train_monomial, but after every gradient step retain only the s
+   largest-magnitude exponents and set all others exactly to zero; return
+   (alpha_iht, beta_iht) and the IHT support.
+3. Step 12.3 — evaluate_iht_on_test: compute the IHT monomial's test PR-AUC
+   with average_precision_score.
+4. Step 12.2 — compare_pruned_vs_iht: compute the Jaccard overlap
+   J = |S_prune intersect S_IHT| / |S_prune union S_IHT| and the comparison
+   record (r_prune, r_iht, PR-AUC_prune, PR-AUC_iht).
+5. Persist a single-row CSV and JSON comparison record with the feature
+   names of both supports.
+
+Outputs:
+- Dict with "iht_result", "comparison" (jaccard, r's, PR-AUCs), and
+  "persistence" (csv, json paths).
+
+(b) Input-to-output transformation
+The post-hoc pruned support and the training/test data are transformed into
+an independent sparse model and a structural agreement measure: the IHT route
+produces sparsity during training rather than after it, and the Jaccard
+overlap quantifies whether the extracted feature support is an artifact of
+pruning.
+
+(c) LaTeX-context role
+The paper frames IHT as the robustness check: "As an alternative, we use
+iterative hard thresholding (IHT), which retains only the s largest exponents
+after each gradient step. This provides an independent route to sparsity for
+assessing whether the extracted structure depends on post-hoc pruning." The
+paper's IHT table (Jaccard 1.00 on Loan, FraudEcom, Creditcard; 0.83 on
+Default) is the target of this callable's comparison record.
+
+(d) Element of the research implemented
+In-training sparsity via hard thresholding and its comparison with post-hoc
+pruning: agreement between the two routes is the paper's evidence that
+"the extracted rules primarily reflect learned data structure rather than
+pruning artifacts."
+
+
+================================================================================
+Callable 13 of 16: orchestrate_human_assessment
+Task 13: Human readability and preference assessment
+(workbook line 12557)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- cfg : Dict — validated configuration (survey constants: 36 respondents,
+  14 finance/risk, 20 AI/ML, 3 overlap, 2 excluded).
+- fitted_models : Dict[str, Dict] — seed-45 fitted model artifacts for Loan
+  and FraudEcom (the paper's displayed examples).
+- pr_auc_by_representation : Dict[str, Dict[str, float]] — seed-45 PR-AUC
+  values keyed dataset -> representation (used only for the ex-post
+  trade-off, never shown to participants).
+- raw_records : List[Dict] — raw survey response records.
+- output_dir : Path; seed : int, default 45 (illustrative display seed).
+
+Processes:
+1. Step 13.1 — prepare_survey_instruments: render the pruned monomial as
+   LaTeX (exponents to two decimals), the directional rule as natural-language
+   sentences (direction from sign of alpha*beta_j), the scorecard as a point
+   table with flag threshold, and the tally as a condition list with flag
+   threshold; prepare consent text, the five-point Likert scale ("very
+   difficult" to "very easy"), the forced-choice comprehension question
+   ("does this condition increase or decrease predicted risk?"), and the
+   single-choice preference question; record the ethics protocol (IRB,
+   consent, anonymization, secure storage). Predictive performance is
+   withheld from all instruments.
+2. Step 13.2 — build_response_frame: classify backgrounds (finance/risk,
+   AI/ML, both, neither), assign anonymized respondent ids, store presentation
+   order, Likert ratings, comprehension answers, and preference choices;
+   persist the anonymized frame.
+3. Step 13.3 — analyze_survey: mean ease per representation per dataset;
+   comprehension accuracy; preference proportions within each subgroup
+   (overlap counted in both denominators); ease-gain vs PR-AUC-loss
+   coordinates relative to the pruned monomial:
+   ease_gain_r = mean_ease_r - mean_ease_pruned,
+   PR-AUC_loss_r = PR-AUC_pruned - PR-AUC_r;
+   persist the trade-off table.
+
+Outputs:
+- Dict with "instruments", "responses" (anonymized frame), "analysis",
+  "persistence" (anonymized CSV, trade-off CSV).
+
+(b) Input-to-output transformation
+Seed-45 fitted models and raw response records are transformed into
+human-readable stimuli, an anonymized response dataset, and aggregated
+readability/preference statistics: subjective ease and practical preference
+are measured in isolation from performance information, then joined ex-post
+with PR-AUC to form the trade-off coordinates.
+
+(c) LaTeX-context role
+The paper's assessment design is the contract: "For each dataset, participants
+are presented with the pruned monomial, directional rule, scorecard, and
+tally derived from the fitted classifier, without information about predictive
+performance. They rate each representation's ease of understanding on a
+five-point Likert scale and select the representation they would prefer for
+practical use." The paper's population numbers ("Of 36 respondents, 34 were
+included in the subgroup analysis: 14 with a finance/risk background ... and
+20 AI/ML researchers. Two respondents reporting neither background were
+excluded") are encoded in the configuration this callable consumes.
+
+(d) Element of the research implemented
+The human readability and preference study: the paper's finding that "all
+three simplified rules were perceived as easier to understand than the
+pruned monomial on both datasets," with preference splitting by background
+(finance/risk: directional rule 57%; AI/ML: point-based forms 72%), and the
+ease-gain versus PR-AUC-loss trade-off visualization.
+
+
+================================================================================
+Callable 14 of 16: orchestrate_aggregation_and_verification
+Task 14: Aggregate results across five seeds and verify qualitative targets
+(workbook line 13155)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- results : Dict[str, Any] — per-seed results from the Task 11 orchestrator.
+- cfg : Dict — validated configuration (verification targets and tolerances).
+- output_dir : Path — output root.
+- figures : Dict[str, Any] — figure-data dictionaries keyed "fig1".."fig4".
+- iht_results : Optional[Dict[str, Any]] — per-seed IHT comparison records.
+
+Processes:
+1. Step 14.1 — aggregate_across_seeds: group by dataset and representation;
+   compute mean and sample standard deviation (n-1) over the five seeds for
+   PR-AUC, tau_b, ECE, rho, tau_pred, MAE (from per-seed pairs), Jaccard,
+   thresholds, and support sizes; raise on a missing seed.
+2. Step 14.2 — verify_quantitative_targets: soft-invariant checks — pruning
+   PR-AUC loss <= 0.008 on every dataset; Loan scorecard ~= 0.329 +- 0.02 and
+   tally ~= 0.300 +- 0.02; Default directional PR-AUC ~= 0.381 +- 0.02 with
+   tau_b ~= 0.744 +- 0.04; fidelity-prediction MAE < 0.025 for Loan, Default,
+   Creditcard and near 0.236 for FraudEcom; ECE < 0.02 everywhere — each
+   reported as pass/tolerance/fail with expected-vs-observed diagnostics;
+   no silent modification of data.
+3. Step 14.3 — persist_results: write the four table equivalents (dataset
+   metadata; PR-AUC/tau_b/ECE by dataset and representation; rho/tau_pred/
+   tau_b/MAE; IHT comparison with Jaccard) and the four figure equivalents
+   (monomial vs rule; four simplifications for Loan and FraudEcom at seed 45;
+   preference by background; ease gain vs PR-AUC loss), with seed-labeled
+   captions distinguishing representative displays from averaged artifacts.
+
+Outputs:
+- Dict with "aggregated", "verification", "persistence".
+
+(b) Input-to-output transformation
+Per-seed nested results are transformed into aggregated mean/SD tables and
+an audited verdict against the paper's headline claims: dispersion is
+reported (the paper notes variability "may be larger for aggressive
+simplifications"), and every target is checked with an explicit diagnostic
+report rather than silent suppression.
+
+(c) LaTeX-context role
+The paper's reporting convention is the contract: "Unless stated otherwise,
+reported results are means over the five seeds." The verification targets are
+the paper's numbers, e.g., "On Loan, PR-AUC falls from 0.885 for the pruned
+monomial to 0.329 for the scorecard, and 0.300 for the tally"; "the
+directional rule essentially matches the predictive performance of the full
+monomial (PR-AUC 0.381 versus 0.380) despite a lower rank fidelity (tau_b =
+0.744)"; and the fidelity-prediction MAE values (0.017 average on three
+datasets; 0.236 on FraudEcom).
+
+(d) Element of the research implemented
+Five-seed aggregation with dispersion reporting and verification of the
+paper's quantitative claims — the step that turns per-seed records into the
+paper's tables and that distinguishes means over seeds from single-illustrative
+seed-45 displays.
+
+
+================================================================================
+Callable 15 of 16: orchestrate_documentation_and_audit
+Task 15: Documentation, audit, and reproducibility sign-off
+(workbook line 14000)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- all_artifacts : Dict[str, Any] — persisted artifacts keyed
+  dataset -> seed -> artifact type.
+- cfg : Dict — validated configuration.
+- output_dir : Path — output root.
+- results : Optional[Dict[str, Any]] — orchestrator results for the
+  key-completeness check.
+
+Processes:
+1. Step 15.1 — write_methodological_appendix: generate a deterministic
+  appendix from the artifact store recording, per dataset and seed: feature
+  engineering mappings, the Loan label filter, imputation values, scaling
+  constants min_j/max_j, Optuna search spaces and chosen hyperparameters,
+  convergence criteria, fitted alpha and beta, retained support, scorecard
+  points and thresholds, tally threshold, isotonic summaries, ECE bin
+  boundaries, and every UNSPECIFIED-IN-MANUSCRIPT parameter with its chosen
+  placeholder.
+2. Step 15.2 — write_environment_documentation: capture OS/hardware, Python
+  version, live package versions (NumPy, pandas, SciPy, scikit-learn,
+  PyTorch, Optuna), seeds, computational budget, and the ordered execution
+  commands; persist as environment_documentation.json.
+3. Step 15.3 — run_audit_suite: execute the mathematical unit tests — the
+  log-space identity on 100 random rows; the pruning bound on 10,000 rows;
+  the Pearson rho formula against a direct numerical correlation; ECE
+  binning against a hand-computed two-bin example; the scorecard point
+  formula on a synthetic exponent vector; Kendall's tau_b against a known
+  tied example; the constant-feature midpoint policy — plus the leakage
+  audit (test/train index intersection empty), checksum verification
+  (SHA-256 of raw/cleansed artifacts), and orchestrator key-completeness;
+  produce a machine-readable audit_report.json with per-check pass/fail.
+
+Outputs:
+- Dict with "appendix" (path), "environment" (path), "audit" (report).
+
+(b) Input-to-output transformation
+The complete artifact store is transformed into the reproducibility record:
+every methodological decision and fitted value is re-expressed in the
+appendix from artifacts (never recomputed), the environment is snapshotted
+from the live runtime, and the mathematical claims of the pipeline are
+re-verified by fixed-example unit tests.
+
+(c) LaTeX-context role
+The paper's reproducibility requirements are the contract: the appendix must
+record "every preprocessing formula, optimizer setting, Optuna search space,
+convergence criterion, pruning tolerance, threshold-selection rule, and fitted
+exponent vector" and "every ambiguity resolved during reproduction."
+The audit tests implement the paper's mathematical unit-test requirements:
+"the log-space identity, the pruning bound, the correlation formula
+rho = (beta^T Sigma d) / (sqrt(beta^T Sigma beta) sqrt(d^T Sigma d)), and
+the ECE binning arithmetic."
+
+(d) Element of the research implemented
+Methodological appendix authoring, environment documentation, and the final
+integrity audit — the reproducibility sign-off that makes every published
+number traceable to a specific artifact and every mathematical identity
+independently verified.
+
+
+================================================================================
+Callable 16 of 16: run_end_to_end_pipeline
+Task 16: Top-level integrative orchestrator for the end-to-end research
+(workbook line 14873)
+================================================================================
+
+(a) Inputs, Processes, Outputs
+
+Inputs:
+- study_configuration : Dict — the single source of truth.
+- raw_dfs : Dict[str, pd.DataFrame] — the four raw DataFrames.
+- output_dir : Path — output root (every stage persists under
+  output_dir/artifacts).
+- survey_records : Optional[List[Dict]] — raw survey responses; when None,
+  the Task 13 stage is skipped under the explicit recorded skip policy.
+- figures_data : Optional[Dict] — figure-data dictionaries keyed
+  "fig1".."fig4"; when None, derived from survey analysis and seed-45 models.
+
+Processes (six dependency-ordered stages, each invoking the relevant
+task-specific orchestrator exactly once, without implementation duplication):
+1. Stage 1 — _run_validation_and_cleansing: Task 1 (orchestrate_validation)
+   then Task 2 (cleanse_all); the normalized configuration and cleansed
+   frames are extracted.
+2. Stage 2 — _run_features_and_preprocessing: Task 3 feature builders plus
+   the Task 4 orchestrator (orchestrate_splitting_and_scaling) at seed 0 per
+   dataset (static matrices + seed-0 scaled training record).
+3. Stage 3 — _run_hyperparameter_stage: Task 5 (orchestrate_hyperparameter_
+   search) per dataset.
+4. Stage 4 — _run_quantitative_and_iht_stages: Task 11 (run_reproduction_
+   study) as the quantitative engine — it invokes the Task 5/7/8/9/10
+   orchestrators internally (the documented no-duplication decision) — then
+   Task 12 (orchestrate_iht_comparison) per dataset and seed.
+5. Stage 5 — _run_seed45_display_models and _run_survey_stage: Task 13
+   (orchestrate_human_assessment) with the seed-45 display models; skip
+   policy when survey records are absent.
+6. Stage 6 — _run_aggregation_and_documentation: Task 14 (orchestrate_
+   aggregation_and_verification) and Task 15 (orchestrate_documentation_and_
+   audit), assembling the artifact record for the appendix.
+
+Outputs:
+- Dict keyed by stage: "validation", "cleansing", "feature_matrices",
+  "preprocessing", "hyperparameters", "pipeline_results", "iht", "survey",
+  "aggregation", "verification", "figures_persistence", "documentation",
+  and "artifacts_root".
+- Raises TypeError on mis-typed top-level inputs; propagates ConfigError,
+  SchemaValidationError, LabelRateError from Stage 1; ValueError when survey
+  or figure data are required but absent.
+
+(b) Input-to-output transformation
+The four raw DataFrames and the configuration dictionary are transformed
+into the complete, versioned reproduction archive: validation, cleansing,
+feature construction, seed-0 preprocessing, per-dataset hyperparameters,
+per-dataset-per-seed quantitative results with IHT robustness, the seed-45
+survey study, aggregation and verification, and the documentation/audit
+sign-off — every stage reading only its designated artifacts and persisting
+under the versioned archive.
+
+(c) LaTeX-context role
+The callable realizes the paper's full reverse-interpretability program as a
+single executable system: "Starting from an interpretable classifier
+expressed as a single equation over the input features, we progressively
+simplify it into more readable forms, including a pruned monomial, a
+directional if-then rule, and the integer scorecards and tallies that finance
+already deploys. Because the equation is itself the predictive model rather
+than a post-hoc explanation we can directly quantify what is lost under each
+simplification." The pipeline enforces the paper's experimental discipline —
+"the test partition is used only once at the end of the pipeline," support
+sizes, thresholds, and calibrators chosen on validation only — and its
+reporting discipline: aggregated means over five seeds clearly distinguished
+from the representative seed-45 displays.
+
+(d) Element of the research implemented
+The decision-grade explanation and governance system itself: the integrative
+orchestrator that converts an already interpretable but operationally
+unreadable learned equation into the simplest human-actionable representation
+appropriate to each stakeholder (customer, loan officer, fraud investigator,
+model validator, regulator), with the predictive, fidelity, and calibration
+costs of every conversion explicitly quantified and — for the directional
+rule — predicted before deployment via the closed-form Greiner-based fidelity
+prediction.
+
+================================================================================
+END OF DOCUMENT — all 16 final orchestrator callables (Tasks 1 to 16-plus)
+covered, in dependency order.
+================================================================================
