@@ -1,0 +1,697 @@
+# =============================================================================#
+#
+#  config.yaml — Study Configuration
+#
+#  How Simple Can It Get? From Interpretable Equations to Readable Rules
+#  for Financial Decision Making
+#
+#  This file is the single source of truth for the reproduction pipeline. It
+#  contains every paper-derived parameter and every replicator-chosen
+#  parameter required by the `run_end_to_end_pipeline(study_configuration,
+#  raw_dfs, output_dir, survey_records=None, figures_data=None) ->
+#  EndToEndPipelineResult` function and by the task-specific orchestrators it
+#  invokes (Tasks 1 to 15). All parameters not stated in the manuscript are
+#  explicitly annotated UNSPECIFIED IN MANUSCRIPT followed by the
+#  replicator's chosen placeholder; the choices are defensible defaults, not
+#  paper quotations.
+#
+#  Core Methodological Components:
+#  - ECSEL single-term monomial classifier z(x) = alpha * prod_j x_j^beta_j
+#  - Log-space identity: log|z(x)| = log|alpha| + sum_j beta_j log x_j
+#  - Worst-case pruning bound: |s_full - s_pruned| <= L * sum|beta_j|
+#  - Directional-rule fidelity prediction via Pearson rho and Greiner's tau
+#  - Scorecard and tally construction with validation-selected thresholds
+#  - Iterative hard thresholding (IHT) as an independent sparsity route
+#  - Isotonic calibration and expected calibration error (ECE) computation
+#  - Tie-corrected Kendall's tau_b rank-fidelity measurement
+#
+#  Paper Reference:
+#  Lumadjeng, A., Birbil, I., & Acar, E. (2026). How Simple Can It Get? From
+#  Interpretable Equations to Readable Rules for Financial Decision Making.
+#  https://arxiv.org/abs/2608.09433v1
+#
+#  Author: CS Chirinda
+#  License: MIT
+#  Version: 1.0.0
+#
+# =============================================================================#
+
+# -----------------------------------------------------------------------------
+# 0. Reproduction metadata
+# -----------------------------------------------------------------------------
+reproduction:
+  paper_title: "How Simple Can It Get? From Interpretable Equations to Readable Rules for Financial Decision Making"
+  paper_authors: ["Adia Lumadjeng", "Ilker Birbil", "Erman Acar"]
+  e_journal_submission_date: "2026-08-10"
+  arxiv_link: "https://arxiv.org/abs/2608.09433v1"
+  model_under_study: "ECSEL single-term monomial, K=1"
+  language: "Python 3.11+"
+  libraries: ["NumPy", "pandas", "SciPy", "scikit-learn", "PyTorch or JAX", "Optuna"]
+  seeds: [0, 1, 2, 3, 4]            # UNSPECIFIED IN MANUSCRIPT; simple, reproducible, non-arbitrary integers
+  illustrative_seed_figure_2: 45   # UNSPECIFIED IN MANUSCRIPT; kept because the paper displays seed 45
+  reference_date_loan: "2026-08-09" # UNSPECIFIED IN MANUSCRIPT; dataset access date from the paper bibliography
+
+# -----------------------------------------------------------------------------
+# 1. Dataset parameters
+# -----------------------------------------------------------------------------
+datasets:
+  Loan:
+    n: 395492
+    feature_count: 42
+    positive_rate: 0.101
+    domain: "loan_default"
+    source_reference: "Lending Club Loan Data (Kaggle)"
+  FraudEcom:
+    n: 151112
+    feature_count: 6
+    positive_rate: 0.094
+    domain: "account_fraud"
+    source_reference: "Fraud Ecommerce (Kaggle)"
+  Default:
+    n: 30000
+    feature_count: 26
+    positive_rate: 0.221
+    domain: "credit_default"
+    source_reference: "Default of Credit Card Clients (UCI, Yeh and Lien 2009)"
+  Creditcard:
+    n: 284807
+    feature_count: 30
+    positive_rate: 0.0017
+    domain: "card_fraud"
+    source_reference: "Credit Card Fraud (Dal Pozzolo et al. 2015)"
+
+# -----------------------------------------------------------------------------
+# 2. Data splitting
+# -----------------------------------------------------------------------------
+data_splitting:
+  train_fraction: 0.60
+  val_fraction: 0.20
+  test_fraction: 0.20
+  stratification: "by_label_y"
+  seeds: [0, 1, 2, 3, 4]            # UNSPECIFIED IN MANUSCRIPT; selected above
+  num_seeds: 5
+  test_set_usage: "single_final_evaluation_only"
+
+# -----------------------------------------------------------------------------
+# 3. Feature scaling
+# -----------------------------------------------------------------------------
+feature_scaling:
+  method: "min_max_affine_transform"
+  lower_bound: 0.01                 # ell
+  upper_bound: 10.01                # u
+  scaler_fit: "training_split_only" # applied unchanged to validation and test
+  log_bound_L: 4.605170185988091    # = max(|log 0.01|, |log 10.01|); recomputed by the validator, never trusted
+
+# -----------------------------------------------------------------------------
+# 4. Missing-value and preprocessing policy (revised, per dataset)
+# -----------------------------------------------------------------------------
+missing_value_policy:
+  Loan:
+    numeric_imputation: "training_median"
+    categorical_imputation: "training_mode"
+    imputation_columns: ["revol_util", "mths_since_last_delinq", "mths_since_last_record", "fico_midpoint", "last_fico_range_high"]
+    missingness_flags: ["revol_util", "mths_since_last_delinq", "mths_since_last_record", "next_pymnt_d"]
+    comment: "UNSPECIFIED IN MANUSCRIPT; replicator choice"
+  FraudEcom:
+    numeric_imputation: "none"
+    categorical_imputation: "none"
+    imputation_columns: []
+    count_feature_policy: "training_only_frequencies" # unseen categories in validation/test map to count 1
+    comment: "UNSPECIFIED IN MANUSCRIPT; leakage-safe count construction"
+  Default:
+    numeric_imputation: "none"
+    categorical_imputation: "none"
+    imputation_columns: []
+    recoding: "EDUCATION {0,5,6}->4; MARRIAGE {0}->3; SEX -> SEX_bin (1 for male, 0 for female)"
+    comment: "UNSPECIFIED IN MANUSCRIPT; replicator choice"
+  Creditcard:
+    numeric_imputation: "training_median_if_present" # no missing values expected
+    categorical_imputation: "none"
+    imputation_columns: []
+    comment: "UNSPECIFIED IN MANUSCRIPT; training-median fallback only"
+
+# -----------------------------------------------------------------------------
+# 5. ECSEL monomial architecture
+# -----------------------------------------------------------------------------
+monomial_architecture:
+  architecture_type: "ecsel_single_monomial"
+  K_number_of_terms: 1
+  hidden_layers: 0
+  forward_computation: "z(x) = alpha * prod_j x_j^beta_j"
+  output: "P(y=1|x) = sigmoid(z(x))"
+  log_space_identity: "log|z(x)| = log|alpha| + sum_j beta_j log x_j"
+  parameters:
+    coefficient: "alpha (scalar, real)"
+    exponent_vector: "beta (real, R^m)"
+
+# -----------------------------------------------------------------------------
+# 6. Training configuration
+# -----------------------------------------------------------------------------
+training:
+  loss: "binary_cross_entropy"
+  regularization: "l1_on_exponents"
+  optimizer: "gradient_descent_with_automatic_differentiation"
+  learning_rate_range: [0.0001, 0.1]  # UNSPECIFIED IN MANUSCRIPT; log-uniform search space
+  lambda_range: [0.000001, 0.01]       # UNSPECIFIED IN MANUSCRIPT; l1 strength, log-uniform search space
+  epochs_range: [100, 3000]            # UNSPECIFIED IN MANUSCRIPT; integer-uniform search space
+  initialization:
+    alpha: 1.0                         # UNSPECIFIED IN MANUSCRIPT
+    beta: 0.1                          # UNSPECIFIED IN MANUSCRIPT; every exponent j
+  convergence_criterion: "mean absolute relative training-loss change over 20 consecutive epochs < 1e-6"
+  validation_early_stopping: false     # validation PR-AUC computed only after training
+
+hyperparameter_search:
+  library: "Optuna"
+  sampler: "TPESampler"
+  pruner: "MedianPruner"
+  n_trials: 100                        # UNSPECIFIED IN MANUSCRIPT; replicator-chosen budget
+  learning_rate_range: [0.0001, 0.1]   # log-uniform
+  lambda_range: [0.000001, 0.01]       # log-uniform
+  epochs_range: [100, 3000]            # integer uniform
+  objective: "five_fold_stratified_cross_validated_PR_AUC_on_training_split"
+  protocol: "tuned_once_per_dataset_on_seed_0_split, applied to all five seeds"
+
+# -----------------------------------------------------------------------------
+# 7. Post-hoc pruning
+# -----------------------------------------------------------------------------
+post_hoc_pruning:
+  ranking_criterion: "|beta_j| descending"
+  tie_break: "original feature index ascending"
+  retention_rule: "keep top r features; set rest to zero"
+  tolerance: 0.01                      # PR-AUC tolerance vs the full monomial, absolute
+  support_selection: "smallest r with PR-AUC_val(r) >= PR-AUC_val(full) - 0.01"
+  fallback: "r = m with logged warning when no r satisfies the tolerance"
+  worst_case_guarantee: "|s_full - s_pruned| <= L * sum_{j in S} |beta_j|"
+  bound_verification_rows: 10000
+  bound_verification_split: "validation" # test preserved for final evaluation
+
+# -----------------------------------------------------------------------------
+# 8. Directional rule
+# -----------------------------------------------------------------------------
+directional_rule:
+  score: "s_dir(x) = sum_{j in S} sign(beta_j) log x_j"
+  support: "retained set S"
+  direction_vector: "d_j = sign(beta_j) for j in S, else 0"
+  magnitude_information: "discarded"
+  natural_language_mapping: "sign of alpha * beta_j determines high/low increases risk"
+
+# -----------------------------------------------------------------------------
+# 9. Scorecard and tally
+# -----------------------------------------------------------------------------
+scorecard_and_tally:
+  binarization_cutpoint: "training-set median c_j"
+  direction_rule: "sign of alpha * beta_j determines condition side (x_j >= c_j or x_j <= c_j)"
+  max_points: 5                        # P_max
+  point_formula: "p_j = max(1, round(5 * |beta_j| / max_k |beta_k|))"
+  point_floor: 1                       # keeps every retained feature visible on the card
+  scorecard_score: "V(x) = sum_{j in S} p_j * 1_j(x)"
+  tally_score: "T(x) = sum_{j in S} 1_j(x)"
+  threshold_selection: "integer search over all possible thresholds on validation"
+  threshold_metric: "f1"               # UNSPECIFIED IN MANUSCRIPT; replicator-chosen decision metric (named in the paper's introduction)
+  threshold_search_scorecard: "v in {1, ..., sum_j p_j}"
+  threshold_search_tally: "t in {1, ..., |S|}"
+
+# -----------------------------------------------------------------------------
+# 10. Fidelity prediction
+# -----------------------------------------------------------------------------
+fidelity_prediction:
+  log_feature_vector: "w = (log x_1, ..., log x_m)"
+  covariance: "sample covariance of w from training data"
+  covariance_degrees_of_freedom: 1     # UNSPECIFIED IN MANUSCRIPT; standard sample covariance
+  pearson_correlation: "rho = (beta^T Sigma d) / (sqrt(beta^T Sigma beta) * sqrt(d^T Sigma d))"
+  greiner_prediction: "tau_pred = (2/pi) * arcsin(rho)"
+  distributional_assumption: "elliptical distribution of w"
+  expected_failure_mode: "mass ties from low-cardinality count variables break the Pearson-to-Kendall conversion"
+  prediction_timing: "recorded before any held-out evaluation of the directional rule"
+
+# -----------------------------------------------------------------------------
+# 11. Iterative hard thresholding (IHT)
+# -----------------------------------------------------------------------------
+iht:
+  thresholding_step: "after every gradient update"
+  retention: "keep the s largest |beta_j|, zero the rest"
+  s_source: "equal to the post-hoc pruning r for each seed"
+  comparison_metric: "jaccard overlap between post-hoc pruned support and IHT support"
+  hyperparameters: "same eta*, lambda*, epoch budget as the full monomial"
+
+# -----------------------------------------------------------------------------
+# 12. Calibration
+# -----------------------------------------------------------------------------
+calibration:
+  method: "isotonic_regression"
+  fit_set: "validation_split"
+  application_set: "test_split"
+  representations: ["full", "pruned", "directional", "scorecard", "tally"] # all five, uniformly
+  ece_bins: 10                         # UNSPECIFIED IN MANUSCRIPT; equal-mass bins, replicator choice
+  ece_formula: "ECE = sum_b (|b|/n) * |acc(b) - conf(b)|"
+  out_of_range_policy: "clip test scores to the validation score range endpoints"
+
+# -----------------------------------------------------------------------------
+# 13. Evaluation metrics
+# -----------------------------------------------------------------------------
+evaluation_metrics:
+  primary_performance_metric: "PR_AUC"
+  fidelity_metric: "kendall_tau_b"
+  tau_b_formula: "tau_b = (C - D) / sqrt((C + D + T_s) * (C + D + T_f))"
+  aggregation: "mean and standard deviation over five seeds"
+  fidelity_prediction_error: "mean absolute error between tau_pred and observed tau_b across seeds"
+  baseline_reference: "positive-class base rate of each dataset"
+
+# -----------------------------------------------------------------------------
+# 14. Human assessment
+# -----------------------------------------------------------------------------
+human_assessment:
+  total_respondents: 36
+  included_in_subgroup_analysis: 34
+  finance_risk_count: 14
+  aiml_count: 20
+  overlap_count: 3                     # respondents reporting both backgrounds, counted in both denominators
+  excluded_count: 2                    # respondents reporting neither background
+  datasets_shown: ["Loan", "FraudEcom"]
+  representations_shown: ["pruned", "directional", "scorecard", "tally"]
+  ease_measure: "five_point_likert_scale" # anchors: very difficult ... very easy
+  comprehension_check: "forced_choice_direction_question" # does this condition increase or decrease predicted risk?
+  preference_measure: "single_choice_practical_preference"
+  performance_information_withheld: true
+  display_seed: 45                     # illustrative seed for the displayed models
+  ethics:
+    irb: "exemption_or_approval_required"  # UNSPECIFIED IN MANUSCRIPT; required for an executable study
+    informed_consent: true
+    anonymization: "anonymize free-text responses"
+    secure_storage: true
+
+# -----------------------------------------------------------------------------
+# 15. Plot construction
+# -----------------------------------------------------------------------------
+plots:
+  figure_1: "fitted monomial vs. readable rule (tcolorbox panels)"
+  figure_2: "four simplifications for Loan and FraudEcom, seed 45"
+  figure_3: "preference by professional background (grouped bar, finance/risk vs AI/ML)"
+  figure_4: "ease gain vs PR-AUC loss, relative to the pruned monomial (PR-AUC loss on x, ease gain on y)"
+  library: "matplotlib or LaTeX pgfplots" # UNSPECIFIED IN MANUSCRIPT
+  caption_seed_disclosure: "figures show representative single-seed (45) outputs, not averaged artifacts"
+
+# -----------------------------------------------------------------------------
+# 16. LLM / prompt / API settings (must remain absent)
+# -----------------------------------------------------------------------------
+llm_settings:
+  llm_used: false
+  llm_names: null
+  llm_api_keys: null
+  llm_temperature: null
+  llm_max_tokens: null
+  llm_model_version: null
+  prompt_templates: null
+  comment: "The paper contains no language-model component; any non-None value aborts validation"
+
+# -----------------------------------------------------------------------------
+# 17. Feature-engineering summary (revised, deterministic)
+# -----------------------------------------------------------------------------
+feature_matrices:
+  Loan:
+    feature_count: 42
+    feature_names:
+      - loan_amnt
+      - term_months
+      - int_rate
+      - installment
+      - grade_ordinal
+      - emp_length_years
+      - home_ownership_RENT
+      - home_ownership_MORTGAGE
+      - home_ownership_OWN
+      - annual_inc
+      - verification_status_Source_Verified
+      - verification_status_Not_Verified
+      - mths_since_issue
+      - purpose_debt_consolidation
+      - purpose_credit_card
+      - purpose_home_improvement
+      - purpose_other
+      - dti
+      - delinq_2yrs
+      - inq_last_6mths
+      - open_acc
+      - pub_rec
+      - revol_bal
+      - revol_util
+      - total_acc
+      - out_prncp
+      - total_pymnt
+      - total_rec_prncp
+      - total_rec_int
+      - total_rec_late_fee
+      - recoveries
+      - collection_recovery_fee
+      - mths_since_pymnt
+      - last_pymnt_amnt
+      - next_pymnt_missing
+      - mths_since_last_credit_pull
+      - fico_midpoint
+      - mths_since_last_delinq
+      - mths_since_last_delinq_missing
+      - mths_since_last_record
+      - mths_since_last_record_missing
+      - last_fico_range_high
+  FraudEcom:
+    feature_count: 6
+    feature_names:
+      - purchase_value
+      - age
+      - sex_bin
+      - ip_shared_count
+      - device_shared_count
+      - source_encoded
+  Default:
+    feature_count: 26
+    feature_names:
+      - LIMIT_BAL
+      - SEX_bin
+      - EDUCATION
+      - MARRIAGE
+      - AGE
+      - PAY_0
+      - PAY_2
+      - PAY_3
+      - PAY_4
+      - PAY_5
+      - PAY_6
+      - BILL_AMT1
+      - BILL_AMT2
+      - BILL_AMT3
+      - BILL_AMT4
+      - BILL_AMT5
+      - BILL_AMT6
+      - PAY_AMT1
+      - PAY_AMT2
+      - PAY_AMT3
+      - PAY_AMT4
+      - PAY_AMT5
+      - PAY_AMT6
+      - pay_status_mean
+      - bill_amt_mean
+      - pay_amt_mean
+  Creditcard:
+    feature_count: 30
+    feature_names:
+      - Time
+      - V1
+      - V2
+      - V3
+      - V4
+      - V5
+      - V6
+      - V7
+      - V8
+      - V9
+      - V10
+      - V11
+      - V12
+      - V13
+      - V14
+      - V15
+      - V16
+      - V17
+      - V18
+      - V19
+      - V20
+      - V21
+      - V22
+      - V23
+      - V24
+      - V25
+      - V26
+      - V27
+      - V28
+      - Amount
+
+# -----------------------------------------------------------------------------
+# 18. Verification targets
+# -----------------------------------------------------------------------------
+verification_targets:
+  datasets:
+    Loan:
+      n: 395492
+      feature_count: 42
+      positive_rate: 0.101
+    FraudEcom:
+      n: 151112
+      feature_count: 6
+      positive_rate: 0.094
+    Default:
+      n: 30000
+      feature_count: 26
+      positive_rate: 0.221
+    Creditcard:
+      n: 284807
+      feature_count: 30
+      positive_rate: 0.0017
+  qualitative_targets:
+    pruning_pr_auc_loss_max: 0.008
+    loan_scorecard_pr_auc: 0.329
+    loan_tally_pr_auc: 0.300
+    default_directional_pr_auc: 0.381
+    default_directional_tau_b: 0.744
+    fidelity_prediction_mae_max_loan_default_creditcard: 0.025
+    fidelity_prediction_mae_fraud_ecom: 0.236
+    ece_max_all_representations: 0.02
+  soft_invariant_policy: "diagnostic report with expected vs observed values; failures are never silently suppressed"
+
+# -----------------------------------------------------------------------------
+# Raw data schema contracts (ingestion-time contract, before any cleansing)
+# Keys per dataset: required_columns, allowed_aliases, dtypes, min_rows, label_column
+# -----------------------------------------------------------------------------
+raw_data_schemas:
+  Loan:
+    required_columns:
+      - id
+      - loan_amnt
+      - term
+      - int_rate
+      - installment
+      - grade
+      - emp_length
+      - home_ownership
+      - annual_inc
+      - verification_status
+      - issue_d
+      - loan_status
+      - purpose
+      - dti
+      - delinq_2yrs
+      - inq_last_6mths
+      - open_acc
+      - pub_rec
+      - revol_bal
+      - revol_util
+      - total_acc
+      - out_prncp
+      - total_pymnt
+      - total_rec_prncp
+      - total_rec_int
+      - total_rec_late_fee
+      - recoveries
+      - collection_recovery_fee
+      - last_pymnt_d
+      - last_pymnt_amnt
+      - next_pymnt_d
+      - last_credit_pull_d
+      - last_fico_range_high
+      - last_fico_range_low
+      - mths_since_last_delinq
+      - mths_since_last_record
+    allowed_aliases: {}
+    dtypes:
+      id: int64
+      loan_amnt: float64
+      term: object
+      int_rate: float64
+      installment: float64
+      grade: object
+      emp_length: object
+      home_ownership: object
+      annual_inc: float64
+      verification_status: object
+      issue_d: object
+      loan_status: object
+      purpose: object
+      dti: float64
+      delinq_2yrs: int64
+      inq_last_6mths: int64
+      open_acc: int64
+      pub_rec: int64
+      revol_bal: float64
+      revol_util: float64
+      total_acc: int64
+      out_prncp: float64
+      total_pymnt: float64
+      total_rec_prncp: float64
+      total_rec_int: float64
+      total_rec_late_fee: float64
+      recoveries: float64
+      collection_recovery_fee: float64
+      last_pymnt_d: object
+      last_pymnt_amnt: float64
+      next_pymnt_d: object
+      last_credit_pull_d: object
+      last_fico_range_high: int64
+      last_fico_range_low: int64
+      mths_since_last_delinq: float64
+      mths_since_last_record: float64
+    min_rows: 395492
+    label_column: loan_status
+  FraudEcom:
+    required_columns:
+      - user_id
+      - signup_time
+      - purchase_time
+      - purchase_value
+      - device_id
+      - source
+      - browser
+      - sex
+      - age
+      - ip_address
+      - raw_class
+    allowed_aliases:
+      raw_class: class
+    dtypes:
+      user_id: int64
+      signup_time: object
+      purchase_time: object
+      purchase_value: float64
+      device_id: object
+      source: object
+      browser: object
+      sex: int64
+      age: int64
+      ip_address: object
+      raw_class: int64
+    min_rows: 151112
+    label_column: raw_class
+  Default:
+    required_columns:
+      - ID
+      - LIMIT_BAL
+      - SEX
+      - EDUCATION
+      - MARRIAGE
+      - AGE
+      - PAY_0
+      - PAY_2
+      - PAY_3
+      - PAY_4
+      - PAY_5
+      - PAY_6
+      - BILL_AMT1
+      - BILL_AMT2
+      - BILL_AMT3
+      - BILL_AMT4
+      - BILL_AMT5
+      - BILL_AMT6
+      - PAY_AMT1
+      - PAY_AMT2
+      - PAY_AMT3
+      - PAY_AMT4
+      - PAY_AMT5
+      - PAY_AMT6
+      - DEFAULT_NEXT_MONTH
+    allowed_aliases:
+      DEFAULT_NEXT_MONTH: default.payment.next.month
+    dtypes:
+      ID: int64
+      LIMIT_BAL: int64
+      SEX: int64
+      EDUCATION: int64
+      MARRIAGE: int64
+      AGE: int64
+      PAY_0: int64
+      PAY_2: int64
+      PAY_3: int64
+      PAY_4: int64
+      PAY_5: int64
+      PAY_6: int64
+      BILL_AMT1: int64
+      BILL_AMT2: int64
+      BILL_AMT3: int64
+      BILL_AMT4: int64
+      BILL_AMT5: int64
+      BILL_AMT6: int64
+      PAY_AMT1: int64
+      PAY_AMT2: int64
+      PAY_AMT3: int64
+      PAY_AMT4: int64
+      PAY_AMT5: int64
+      PAY_AMT6: int64
+      DEFAULT_NEXT_MONTH: int64
+    min_rows: 30000
+    label_column: DEFAULT_NEXT_MONTH
+  Creditcard:
+    required_columns:
+      - Time
+      - V1
+      - V2
+      - V3
+      - V4
+      - V5
+      - V6
+      - V7
+      - V8
+      - V9
+      - V10
+      - V11
+      - V12
+      - V13
+      - V14
+      - V15
+      - V16
+      - V17
+      - V18
+      - V19
+      - V20
+      - V21
+      - V22
+      - V23
+      - V24
+      - V25
+      - V26
+      - V27
+      - V28
+      - Amount
+      - Class
+    allowed_aliases:
+      Class: Class
+    dtypes:
+      Time: float64
+      V1: float64
+      V2: float64
+      V3: float64
+      V4: float64
+      V5: float64
+      V6: float64
+      V7: float64
+      V8: float64
+      V9: float64
+      V10: float64
+      V11: float64
+      V12: float64
+      V13: float64
+      V14: float64
+      V15: float64
+      V16: float64
+      V17: float64
+      V18: float64
+      V19: float64
+      V20: float64
+      V21: float64
+      V22: float64
+      V23: float64
+      V24: float64
+      V25: float64
+      V26: float64
+      V27: float64
+      V28: float64
+      Amount: float64
+      Class: int64
+    min_rows: 284807
+    label_column: Class
