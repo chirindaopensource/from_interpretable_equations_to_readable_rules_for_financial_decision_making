@@ -15,7 +15,7 @@ explicating the callable's role; and (d) the element of the research pipeline
 the callable implements, with the governing equations in LaTeX notation.
 
 All line anchors refer to the workbook
-"from_interpretable_equations_to_readable_rules_for_financial_decision_making.py".
+"from_interpretable_equations_to_readable_rules_for_financial_decision_making_draft.ipynb".
 No Python code is presented in this document.
 ================================================================================
 
