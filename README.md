@@ -85,8 +85,8 @@ This codebase operationalizes the paper's framework, allowing users to:
 -   Select learning rate, $`\ell_1`$ strength, and training length with Optuna (TPE sampler, 100 trials, five-fold cross-validated PR-AUC on the training split).
 -   Train the ECSEL single-term monomial $`z(x) = \alpha \prod_j x_j^{\beta_j}`$ with automatic differentiation on a numerically stable log-space objective, verifying the log-space identity $`\log|z(x)| = \log|\alpha| + \sum_j \beta_j \log x_j`$ to within $`10^{-6}`$.
 -   Prune to the smallest support whose validation PR-AUC stays within $`0.01`$ of the full monomial and verify the worst-case bound $`|s_{\mathrm{full}} - s_{\mathrm{pruned}}| \le L\sum_{j \in S}|\beta_j|`$ with $`L = \max\{|\log 0.01|, |\log 10.01|\}`$.
--   Build the directional rule $`s_{\mathrm{dir}}(x) = \sum_{j \in S}\operatorname{sign}(\beta_j)\log x_j`$ and predict its rank fidelity a-priori via $`\rho = \frac{\beta^\top \Sigma d}{\sqrt{\beta^\top \Sigma \beta}\sqrt{d^\top \Sigma d}}`$ and Greiner's relation $`\tau_{\mathrm{pred}} = \frac{2}{\pi}\arcsin(\rho)`$.
--   Construct integer scorecards $`V(x) = \sum_j p_j\mathbf{1}_j(x)`$ with $`p_j = \max(1, \operatorname{round}(5|\beta_j|/\max_k|\beta_k|))`$ and tallies $`T(x) = \sum_j \mathbf{1}_j(x)`$ with validation-selected F1 thresholds.
+-   Build the directional rule $`s_{\mathrm{dir}}(x) = \sum_{j \in S}\mathrm{sign}(\beta_j)\log x_j`$ and predict its rank fidelity a-priori via $`\rho = \frac{\beta^\top \Sigma d}{\sqrt{\beta^\top \Sigma \beta}\sqrt{d^\top \Sigma d}}`$ and Greiner's relation $`\tau_{\mathrm{pred}} = \frac{2}{\pi}\arcsin(\rho)`$.
+-   Construct integer scorecards $`V(x) = \sum_j p_j\mathbf{1}_j(x)`$ with $`p_j = \max(1, \mathrm{round}(5|\beta_j|/\max_k|\beta_k|))`$ and tallies $`T(x) = \sum_j \mathbf{1}_j(x)`$ with validation-selected F1 thresholds.
 -   Calibrate all five representations with validation-fit isotonic regression and report the expected calibration error $`\mathrm{ECE} = \sum_b \frac{|b|}{n}|\mathrm{acc}(b) - \mathrm{conf}(b)|`$ on the test set.
 -   Measure tie-corrected rank fidelity $`\tau_b = \frac{C - D}{\sqrt{(C + D + T_s)(C + D + T_f)}}`$ between every simplified form and the full monomial.
 -   Run iterative hard thresholding (IHT) as an independent in-training sparsity route and compare supports with the Jaccard index.
@@ -130,7 +130,7 @@ T(x) = \sum_{j=1}^{r}\mathbf{1}_j(x), \qquad \text{flag when } T(x) \ge t,
 while the scorecard retains approximate magnitude through integer points,
 
 ```math
-p_j = \max\left(1,\ \operatorname{round}\left(5\,\frac{|\beta_j|}{\max_k|\beta_k|}\right)\right), \qquad V(x) = \sum_{j=1}^{r}p_j\mathbf{1}_j(x), \qquad \text{flag when } V(x) \ge v,
+p_j = \max\left(1,\ \mathrm{round}\left(5\,\frac{|\beta_j|}{\max_k|\beta_k|}\right)\right), \qquad V(x) = \sum_{j=1}^{r}p_j\mathbf{1}_j(x), \qquad \text{flag when } V(x) \ge v,
 ```
 
 with $`P_{\max} = 5`$ and a floor of $`1`$ that keeps every retained feature visible on the card.
@@ -138,10 +138,10 @@ with $`P_{\max} = 5`$ and a floor of $`1`$ that keeps every retained feature vis
 **4. The Directional Rule and Closed-Form Fidelity Prediction.** The directional rule replaces every exponent with its sign,
 
 ```math
-s_{\mathrm{dir}}(x) = \sum_{j \in S}\operatorname{sign}(\beta_j)\log x_j,
+s_{\mathrm{dir}}(x) = \sum_{j \in S}\mathrm{sign}(\beta_j)\log x_j,
 ```
 
-preserving support and direction while discarding magnitudes. Writing $`w = (\log x_1, \dots, \log x_m)`$ with covariance $`\Sigma`$, and $`d_j = \operatorname{sign}(\beta_j)`$ on the retained set (0 otherwise), the Pearson correlation between the full and directional log-scores is
+preserving support and direction while discarding magnitudes. Writing $`w = (\log x_1, \dots, \log x_m)`$ with covariance $`\Sigma`$, and $`d_j = \mathrm{sign}(\beta_j)`$ on the retained set (0 otherwise), the Pearson correlation between the full and directional log-scores is
 
 ```math
 \rho = \frac{\beta^\top \Sigma d}{\sqrt{\beta^\top \Sigma \beta}\sqrt{d^\top \Sigma d}},
@@ -187,7 +187,7 @@ The provided iPython Notebook (`from_interpretable_equations_to_readable_rules_f
 -   **Configuration-Driven Design:** All study parameters (dataset statistics, raw-data schema contracts, split fractions, scaling bounds, missing-value policies, training and Optuna settings, pruning tolerance, scorecard/tally rules, fidelity-prediction assumptions, IHT settings, calibration bins, evaluation metrics, survey constants, plots, LLM-absence, feature matrices, verification targets) are managed in the external `config.yaml` file as the single source of truth; every `UNSPECIFIED IN MANUSCRIPT` parameter is annotated with its replicator placeholder.
 -   **Rigorous Data Validation:** A multi-stage validation process checks required columns, declared dtypes, alias resolution (e.g., `raw_class`/`class`, `DEFAULT_NEXT_MONTH`/`default.payment.next.month`), row-count lower bounds, per-column missingness, and the raw positive-class rates against the paper's values within $`\pm 0.001`$; the configuration validator recomputes $`L`$ rather than trusting a literal and enforces the LLM-absence contract.
 -   **Leakage-Free Cleansing and Preprocessing:** Deterministic parsers, recodings, and missingness flags in cleansing; training-only medians, minima, maxima, and count features; the affine min-max transform applied unchanged to validation and test with clipping counts logged.
--   **Numerically Stable Monomial Training:** The log-space forward $`z(x) = \operatorname{sign}(\alpha)\exp(\log|\alpha| + \beta^\top \log x)`$, a stable binary cross-entropy, PyTorch automatic differentiation, a 20-epoch relative-loss convergence criterion, and post-training verification of the log-space identity.
+-   **Numerically Stable Monomial Training:** The log-space forward $`z(x) = \mathrm{sign}(\alpha)\exp(\log|\alpha| + \beta^\top \log x)`$, a stable binary cross-entropy, PyTorch automatic differentiation, a 20-epoch relative-loss convergence criterion, and post-training verification of the log-space identity.
 -   **Worst-Case-Guaranteed Pruning:** Exponent-magnitude ranking with deterministic tie-breaking, per-support validation PR-AUC curves, the smallest-support-within-tolerance rule, and empirical verification of the pruning bound on 10,000 validation rows.
 -   **A-Priori Fidelity Prediction:** The directional rule's rank fidelity is predicted from fitted exponents and the training log-feature covariance (Pearson $`\rho`$ plus Greiner's $`\tau_{\mathrm{pred}}`$) and recorded before any held-out evaluation.
 -   **Finance-Grade Scorecards and Tallies:** Median binarization, integer point assignment with $`P_{\max} = 5`$, and exhaustive validation-only threshold search maximizing F1.
@@ -211,7 +211,7 @@ The core analytical steps directly implement the methodology from the paper:
 6.  **Monomial Training (Task 6):** `orchestrate_monomial_training` trains with automatic differentiation (init $`\alpha = 1.0`$, $`\beta_j = 0.1`$), stops on training-loss convergence (mean absolute relative change over 20 epochs below $`10^{-6}`$), verifies the log-space identity, and persists parameters and loss history.
 7.  **Pruning (Task 7):** `orchestrate_pruning` evaluates the per-support validation PR-AUC curve, selects $`r^* = \min\{r : \mathrm{PR\text{-}AUC}_{val}(r) \ge \mathrm{PR\text{-}AUC}_{val}(\text{full}) - 0.01\}`$, and verifies $`|s_{full} - s_{pruned}| \le L\sum_{j \in R^c}|\beta_j|`$ on validation rows.
 8.  **Directional Rule and Fidelity Prediction (Task 8):** `orchestrate_directional_rule` builds $`d`$ and $`s_{\mathrm{dir}}`$, computes $`\rho`$ and $`\tau_{\mathrm{pred}}`$ from the training covariance, and records the prediction before evaluation.
-9.  **Scorecard and Tally (Task 9):** `orchestrate_scorecard_tally` binarizes at training medians, assigns points $`p_j = \max(1, \operatorname{round}(5|\beta_j|/\max_k|\beta_k|))`$, and selects integer thresholds on validation F1.
+9.  **Scorecard and Tally (Task 9):** `orchestrate_scorecard_tally` binarizes at training medians, assigns points $`p_j = \max(1, \mathrm{round}(5|\beta_j|/\max_k|\beta_k|))`$, and selects integer thresholds on validation F1.
 10. **Calibration (Task 10):** `orchestrate_calibration` fits isotonic calibrators on validation for all five representations and computes ECE ($`B = 10`$) on test scores clipped to the validation range.
 11. **Quantitative Engine (Task 11):** `run_reproduction_study` executes the twelve-step per-dataset per-seed sequence (splits, preprocessing, counts, training, pruning, directional rule, fidelity, scorecard/tally, calibration, PR-AUC, $`\tau_b`$, assembly), enforcing the anti-leakage invariant and the test-used-once rule.
 12. **IHT Robustness (Task 12):** `orchestrate_iht_comparison` trains with hard thresholding to $`s = |S_{prune}|`$, evaluates test PR-AUC, and records Jaccard $`J = |S_{prune} \cap S_{IHT}|/|S_{prune} \cup S_{IHT}|`$.
@@ -1160,4 +1160,3 @@ https://github.com/chirindaopensource/from_interpretable_equations_to_readable_r
 ---
 
 *This README was generated based on the structure and content of the `from_interpretable_equations_to_readable_rules_for_financial_decision_making_draft.ipynb` notebook and follows best practices for research software documentation.*
-
