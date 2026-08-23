@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+# ==============================================================================#
+#
+#  requirements.txt
+#
+#  How Simple Can It Get? From Interpretable Equations to Readable Rules
+#  for Financial Decision Making
+#
+#  This file declares the Python dependency set required to execute the
+#  production-grade implementation of the reproduction protocol for "How
+#  Simple Can It Get? From Interpretable Equations to Readable Rules for
+#  Financial Decision Making" by Adia Lumadjeng, Ilker Birbil, and Erman
+#  Acar (2026). It delivers a decision-grade explanation and governance
+#  system that converts an already interpretable but operationally
+#  unreadable learned equation into the simplest human-actionable
+#  representation appropriate to each stakeholder - customer, loan officer,
+#  fraud investigator, model validator, or regulator - with the predictive,
+#  fidelity, and calibration costs of that conversion explicitly quantified
+#  and, where possible, predicted before deployment.
+#
+#  Core Methodological Components:
+#  - ECSEL single-term monomial classifier z(x) = alpha * prod_j x_j^beta_j
+#  - Log-space transformation: log|z(x)| = log|alpha| + sum_j beta_j log x_j
+#  - Worst-case pruning perturbation bound: |s_full - s_pruned| <= L * sum|beta_j|
+#  - Directional-rule fidelity prediction via Pearson rho and Greiner's relation
+#  - Scorecard and tally construction with validation-selected integer thresholds
+#  - Iterative hard thresholding (IHT) as an independent sparsity route
+#  - Isotonic calibration and expected calibration error (ECE) computation
+#  - Tie-corrected Kendall's tau_b rank-fidelity measurement
+#
+#  Technical Implementation Features:
+#  - PyTorch automatic differentiation for exact monomial gradients
+#  - Optuna TPE Bayesian hyperparameter search with median pruning
+#  - Stratified 60/20/20 splits over five reproducible random seeds
+#  - Leakage-safe, training-only scaling, imputation, and count construction
+#  - Versioned artifact persistence with SHA-256 integrity checksums
+#  - Mathematical unit-test audit suite (log-space identity, pruning bound,
+#    rho formula, ECE binning, scorecard points, Kendall tau_b)
+#  - Human readability and preference assessment with ethics protocol
+#
+#  Dependency policy:
+#  - Every third-party import used by the pipeline maps to exactly one
+#    package below; no import in the module's import block is left out.
+#  - Version floors are set to the earliest releases with full Python 3.11
+#    support. Exact, machine-pinned versions are captured at runtime by the
+#    environment-documentation stage (write_environment_documentation) and
+#    recorded in environment_documentation.json for audit.
+#  - A CPU build of PyTorch is sufficient: the ECSEL monomial is trained
+#    with full-batch gradient descent on a small parameter vector.
+#
+#  Paper Reference:
+#  Lumadjeng, A., Birbil, I., & Acar, E. (2026). How Simple Can It Get? From
+#  Interpretable Equations to Readable Rules for Financial Decision Making.
+#  https://arxiv.org/abs/2608.09433v1
+#
+#  Author: CS Chirinda
+#  License: MIT
+#  Version: 1.0.0
+#
+# ==============================================================================#
+
+# ------------------------------------------------------------------------------
+# Runtime interpreter
+# ------------------------------------------------------------------------------
+# The pipeline targets CPython 3.11 or newer (typing features, dataclasses,
+# importlib.metadata, and sqlite3 RDBStorage all require 3.8+; 3.11 is pinned
+# in the environment documentation).
+#     python>=3.11
+
+# ------------------------------------------------------------------------------
+# Standard-library modules used by the pipeline (no installation required)
+# ------------------------------------------------------------------------------
+# copy        : deepcopy protects fitted models from accidental mutation
+# dataclasses : dataclass + field define immutable result containers
+# datetime    : datetime + timezone stamp every persisted artifact
+# pathlib     : type-safe, cross-platform artifact and output paths
+# hashlib     : SHA-256 checksums for raw, cleansed, and derived artifacts
+# importlib.metadata : live package-version capture for environment docs
+# json        : the artifact-store interchange format (configs, records)
+# logging     : the shared reproduction-study logger used by every stage
+# math        : tolerance checks and paper-derived constant verification
+# platform    : hardware and OS metadata for the environment documentation
+# random      : deterministic RNG for hyperparameter-search seeding
+# re          : reserved for pattern-based string validation
+# sys         : interpreter metadata for the environment record
+# time        : wall-clock timing of orchestration stages
+# warnings    : controlled diagnostics for constant-feature/clipping events
+# typing      : PEP 484 annotations for every callable contract
+# sqlite3     : Optuna RDBStorage (resumable study databases)
+
+# ------------------------------------------------------------------------------
+# Third-party packages (the complete pipeline import set)
+# ------------------------------------------------------------------------------
+
+# NumPy: vectorized array mathematics for the entire pipeline (imported as np)
+numpy>=1.26.0
+
+# pandas: tabular ingestion, cleansing, and aggregation (imported as pd);
+# provides pandas.api.types.is_bool_dtype / is_integer_dtype used in the
+# Task 1 label-rate validation
+pandas>=2.1.0
+
+# SciPy: statistical primitives; provides scipy.stats.kendalltau, the oracle
+# Kendall tau_b used by the audit-suite unit test
+scipy>=1.11.0
+
+# scikit-learn (PyPI name; imported as sklearn): provides
+# sklearn.isotonic.IsotonicRegression (PAV calibration),
+# sklearn.metrics.average_precision_score (PR-AUC) and f1_score (threshold
+# decision metric), and sklearn.model_selection.StratifiedKFold /
+# StratifiedShuffleSplit (five-fold CV and 60/20/20 stratified splits)
+scikit-learn>=1.3.0
+
+# PyTorch: tensor primitives and torch.nn.functional (F) for automatic
+# differentiation of the monomial and the stable sigmoid/logaddexp loss;
+# a CPU build is sufficient for the full pipeline
+torch>=2.1.0
+
+# Optuna: Bayesian hyperparameter search framework; provides
+# optuna.Trial, optuna.pruners.MedianPruner, and
+# optuna.samplers.TPESampler; study persistence uses the stdlib sqlite3
+# RDBStorage backend
+optuna>=3.4.0
+
+# Matplotlib: figure production; provides matplotlib (backend
+# configuration) and matplotlib.pyplot (plt) for the results and survey
+# plots (Figures 1-4 equivalents)
+matplotlib>=3.8.0
+
+# PyYAML: YAML parsing (yaml.safe_load) that reads the config.yaml study
+# configuration (the single source of truth) into the pipeline dictionary
+PyYAML>=6.0.1
+
+# Faker: synthetic data generation (fake.*) used by the usage example to
+# build high-fidelity raw DataFrames at the paper's population sizes when
+# the Kaggle/UCI sources are unavailable locally
+Faker>=20.0.0
+
+# PyArrow: parquet engine used by pandas.to_parquet in the Task 2
+# persistence stage (versioned, dtype-preserving cleansed artifacts with
+# SHA-256 checksums)
+pyarrow>=14.0.0
+
+# ------------------------------------------------------------------------------
+# Optional notebook runtime (not required by the pipeline callables)
+# ------------------------------------------------------------------------------
+# The implementation ships as a single iPython notebook; uncomment to run it:
+# ipykernel>=6.28.0
+# notebook>=7.0.0
+
+# ------------------------------------------------------------------------------
+# Installation
+# ------------------------------------------------------------------------------
+# Create a virtual environment (Python 3.11+), then install:
+#     pip install -r requirements.txt
+# For a CPU PyTorch build on Windows/Linux this is sufficient; for CUDA
+# builds follow the official torch index-url instructions before installing
+# the remaining packages.
+# Exact reproductions should replace the floors above with the versions
+# recorded in environment_documentation.json.
